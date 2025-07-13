@@ -1,0 +1,20 @@
+#pragma kernel TransformChunk
+
+struct Triangle
+{
+    float3 posA , posB , posC;
+    float3 normalA , normalB , normalC;
+};
+
+RWStructuredBuffer<Triangle> WorldTriangles;
+StructuredBuffer<Triangle> LocalTriangles;
+
+float4x4 posMatrix;
+float4x4 normalMatrix;
+
+
+[numthreads(8 , 8 , 1)]
+void TransformChunk (uint3 id : SV_DispatchThreadID)
+{
+    
+}
