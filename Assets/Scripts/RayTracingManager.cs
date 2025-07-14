@@ -18,6 +18,7 @@ public class RayTracingManager : MonoBehaviour
     [Header("Reference")]
     [SerializeField] private Shader rayTracingShader;
     [SerializeField] private Shader frameAccumulator;
+    public ComputeShader transformTriangles;
     private Material rayTracingMaterial;
     private Material frameAccumulatorMaterial;
     

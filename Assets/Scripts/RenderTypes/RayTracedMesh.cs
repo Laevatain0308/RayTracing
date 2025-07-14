@@ -15,6 +15,10 @@ public class RayTracedMesh : RayTracedObject
     [SerializeField] private Mesh mesh;
     [SerializeField] private MeshChunk[] localChunks;       // 物体坐标系下的区块数组
     private MeshChunk[] worldChunks;                        // 世界坐标系下的区块数组
+
+    
+    private ComputeBuffer localTrisBuffer;
+    private ComputeBuffer worldTrisBuffer;
     
     
 
@@ -149,12 +153,49 @@ public class RayTracedMesh : RayTracedObject
         worldChunk.subMeshIndex = localChunk.subMeshIndex;
     }
 
+    // 性能太差（
     private void TransformLocalToWorldChunkGPU(MeshChunk worldChunk , MeshChunk localChunk , Matrix4x4 posMatrix , Matrix4x4 normalMatrix)
     {
+        ComputeShader shader = RayTracingManager.instance.transformTriangles;
+        int kernel = shader.FindKernel("TransformTriangles");
         
+        // 初始化包围盒
+        Vector3 boundsMin = posMatrix.MultiplyPoint3x4(localChunk.triangles[0].posA);
+        Vector3 boundsMax = boundsMin;
+
+        // 搭建缓冲区
+        ShaderHelper.CreateStructuredBuffer<Triangle>(ref localTrisBuffer , localChunk.triangles);
+        ShaderHelper.CreateStructuredBuffer<Triangle>(ref worldTrisBuffer , worldChunk.triangles);
+        
+        // 传入 ComputeShader 并行计算
+        shader.SetBuffer(kernel , "_WorldTriangles" , worldTrisBuffer);
+        shader.SetBuffer(kernel , "_LocalTriangles" , localTrisBuffer);
+        shader.SetInt("_LocalTriangleCount" , localChunk.triangles.Length);
+        shader.SetMatrix("_PosMatrix" , posMatrix);
+        shader.SetMatrix("_NormalMatrix" , normalMatrix);
+        
+        shader.Dispatch(kernel , Mathf.CeilToInt(localChunk.triangles.Length / 64f) , 1 , 1);
+        
+        worldTrisBuffer.GetData(worldChunk.triangles);
+        
+        // 计算包围盒
+        Triangle[] tris = worldChunk.triangles;
+        for (int i = 0 ; i < tris.Length ; i++)
+        {
+            boundsMin = Vector3.Min(boundsMin , tris[i].posA);
+            boundsMin = Vector3.Min(boundsMin , tris[i].posB);
+            boundsMin = Vector3.Min(boundsMin , tris[i].posC);
+            boundsMax = Vector3.Max(boundsMax , tris[i].posA);
+            boundsMax = Vector3.Max(boundsMax , tris[i].posB);
+            boundsMax = Vector3.Max(boundsMax , tris[i].posC);
+        }
+        
+        worldChunk.bounds = new Bounds((boundsMax + boundsMin) / 2 , boundsMax - boundsMin);
+        worldChunk.subMeshIndex = localChunk.subMeshIndex;
     }
 
 
+    
     public RayTracingMaterial GetMaterial(int subMeshIndex)
     {
         return material;
@@ -183,5 +224,7 @@ public class RayTracedMesh : RayTracedObject
     private void OnDisable()
     {
         RayTracingManager.instance ? .UnregisterMesh(this);
+        
+        ShaderHelper.Release(localTrisBuffer , worldTrisBuffer);
     }
 }

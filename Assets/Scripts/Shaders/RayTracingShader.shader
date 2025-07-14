@@ -65,6 +65,8 @@ Shader "Ray Tracing/RayTracingShader"
                 float4 emissionColor;
                 float emissionStrength;
                 float smoothness;
+                float metallic;
+                float4 specularColor;
             };
 
             struct Sphere
@@ -332,17 +334,21 @@ Shader "Ray Tracing/RayTracingShader"
                                                                                              
                     if (info.didHit)                                                         
                     {                                                                        
+                        RayTracingMaterial mat = info.material;
+                        
                         ray.origin = info.pos;
                         
                         float3 diffuseDir = normalize(info.normal + RandomDirection(seed));
                         float3 specularDir = normalize(reflect(ray.dir , info.normal));
-                        ray.dir = lerp(diffuseDir , specularDir , info.material.smoothness);
+
+                        bool isSpecularBounce = mat.metallic >= RandomValue01(seed);
+                        
+                        ray.dir = lerp(diffuseDir , specularDir , mat.smoothness * isSpecularBounce);
                                                                                              
-                        RayTracingMaterial mat = info.material;                              
                         float3 emittedLight = mat.emissionColor * mat.emissionStrength;      // 获取自发光信息
                         incomingLight += emittedLight * rayColor;
 
-                        rayColor *= mat.color;
+                        rayColor *= lerp(mat.color , mat.specularColor , isSpecularBounce);
                     }
                     else
                     {
