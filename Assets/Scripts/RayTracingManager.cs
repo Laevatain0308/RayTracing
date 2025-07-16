@@ -33,9 +33,21 @@ public class RayTracingManager : MonoBehaviour
     [SerializeField] private Light sun;
     [SerializeField] private float sunFocus;
     [SerializeField] private float sunIntensity;
-    [SerializeField] private Color skyHorizonColor;             // 地平线颜色 
-    [SerializeField] private Color skyZenithColor;              // 天顶颜色
+    [SerializeField] private Color skyHorizonColor;                     // 地平线颜色 
+    [SerializeField] private Color skyZenithColor;                      // 天顶颜色
     [SerializeField] private Color groundColor;
+
+
+    [Header("Depth of Field")] 
+    [SerializeField] private bool depthOfFieldEnabled;
+    [SerializeField , Min(0.01f)] private float focusDistance;          // 焦距
+    [SerializeField , Min(0)] private float defocusStrength;            // 离焦程度
+    [SerializeField , Min(0)] private float divergeStrength;            // 光线发散程度（模糊程度）
+
+    [Space] 
+    [SerializeField] private bool gizmosDisplay;
+    [SerializeField] private Mesh gizmosPlaneMesh;
+    [SerializeField] private Color gizmosColor;
 
 
     [Header("Ray Traced Objects")]
@@ -150,15 +162,20 @@ public class RayTracingManager : MonoBehaviour
         rayTracingMaterial.SetColor("_SkyHorizonColor" , skyHorizonColor);
         rayTracingMaterial.SetColor("_SkyZenithColor" , skyZenithColor);
         rayTracingMaterial.SetColor("_GroundColor" , groundColor);
+        
+        // 景深
+        rayTracingMaterial.SetInt("_DepthOfFieldEnabled" , depthOfFieldEnabled ? 1 : 0);
+        rayTracingMaterial.SetFloat("_DefocusStrength" , defocusStrength);
+        rayTracingMaterial.SetFloat("_DivergeStrength" , divergeStrength);
     }
 
 
     private void UpdateCameraParam(Camera cam)
     {
-        float screenPlaneHeight = cam.nearClipPlane * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2;
+        float screenPlaneHeight = focusDistance * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2;
         float screenPlaneWidth = screenPlaneHeight * cam.aspect;
 
-        rayTracingMaterial.SetVector("_ViewParams" , new Vector3(screenPlaneWidth , screenPlaneHeight , cam.nearClipPlane));
+        rayTracingMaterial.SetVector("_ViewParams" , new Vector3(screenPlaneWidth , screenPlaneHeight , focusDistance));
         rayTracingMaterial.SetMatrix("_CameraLocalToWorldMatrix" , cam.transform.localToWorldMatrix);
     }
 
@@ -243,5 +260,18 @@ public class RayTracingManager : MonoBehaviour
         ShaderHelper.Release(resultRT);
 
         instance = null;
+    }
+
+
+    private void OnDrawGizmosSelected()
+    {
+        if (gizmosPlaneMesh != null && gizmosDisplay)
+        {
+            Gizmos.color = gizmosColor;
+            
+            Camera cam = Camera.current;
+            Vector3 pos = cam.transform.position + cam.transform.forward * focusDistance;
+            Gizmos.DrawMesh(gizmosPlaneMesh , pos , Quaternion.LookRotation(cam.transform.up , -cam.transform.forward));
+        }
     }
 }

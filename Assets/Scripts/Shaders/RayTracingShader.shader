@@ -36,6 +36,11 @@ Shader "Ray Tracing/RayTracingShader"
             float4 _SkyHorizonColor;
             float4 _SkyZenithColor;
             float4 _GroundColor;
+
+            // 景深
+            int _DepthOfFieldEnabled;
+            float _DefocusStrength;
+            float _DivergeStrength;
     
             
             struct appdata
@@ -161,6 +166,13 @@ Shader "Ray Tracing/RayTracingShader"
                 return dir * sign(dot(dir , normal));
             }
             
+            // 生成单位圆内的随机点
+            float2 RandomPointInCircle(inout uint seed)
+            {
+                float angle = RandomValue01(seed) * 2 * PI;
+                float2 pointOnCircle = float2(cos(angle) , sin(angle));
+                return pointOnCircle * sqrt(RandomValue01(seed));
+            }
             
             
             //========== SDF ==========//
@@ -377,21 +389,40 @@ Shader "Ray Tracing/RayTracingShader"
             {
                 // 获取随机数种
                 uint seed = CreateRandomSeed(input.uv);
-
                 
-                // 生成光线
+                
                 float3 viewPointLocal = float3(input.uv - 0.5 , 1.0) * _ViewParams;                      // 获取当前屏幕坐标在相机空间下的相对坐标（取屏幕中心点为原点）
                 float3 viewPoint = mul(_CameraLocalToWorldMatrix , float4(viewPointLocal , 1.0));
-                
-                Ray ray;
-                ray.origin = _WorldSpaceCameraPos;
-                ray.dir = normalize(viewPoint - ray.origin);
+
+                float3 cameraRight = _CameraLocalToWorldMatrix._m00_m10_m20;
+                float3 cameraUp = _CameraLocalToWorldMatrix._m01_m11_m21;
 
                 
-                // 光线追踪
                 float3 totalIncomingLights = 0;
                 for (int i=0 ; i<_RayCountPerPixel ; i++)
                 {
+                    // 生成光线
+                    Ray ray;
+
+                    if (_DepthOfFieldEnabled)
+                    {
+                        // 附加景深
+                        float2 defocusJitter = RandomPointInCircle(seed) * _DefocusStrength / _ScreenParams.x;
+                        ray.origin = _WorldSpaceCameraPos + cameraRight * defocusJitter.x + cameraUp * defocusJitter.y;
+                    }
+                    else
+                    {
+                        ray.origin = _WorldSpaceCameraPos;
+                    }
+
+                    // 附加模糊以处理抗锯齿
+                    float2 jitter = RandomPointInCircle(seed) * _DivergeStrength / _ScreenParams.x;
+                    float3 jitterViewPoint = viewPoint + cameraRight * jitter.x + cameraUp * jitter.y;
+                    
+                    ray.dir = normalize(jitterViewPoint - ray.origin);
+
+                    
+                    // 光线追踪
                     totalIncomingLights += Trace(ray , seed);
                 }
                 float3 pixelColor = totalIncomingLights / _RayCountPerPixel;
