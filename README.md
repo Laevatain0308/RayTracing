@@ -1,5 +1,7 @@
 # Ray-Tracing
 
+（此处为初版分支，后续请移步主分支：[Laevatain0308/RayTracing](https://github.com/Laevatain0308/RayTracing/tree/main)）<br>
+
 这里是对光线追踪技术的第一次尝试，该项目基于Unity实现。 
 
 感谢 Sebastian Lague 老师的开发教程及思路提供：[Code Advanture: Ray Tracing](https://www.youtube.com/watch?v=Qz0KTGYJtUk)<br>
