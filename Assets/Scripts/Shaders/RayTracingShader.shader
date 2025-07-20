@@ -74,25 +74,27 @@ Shader "Ray Tracing/RayTracingShader"
                 float4 specularColor;
             };
 
-            struct Sphere
-            {
-                float3 position;
-                float radius;
-                RayTracingMaterial material;
-            };
-
             struct Triangle
             {
                 float3 posA , posB , posC;
                 float3 normalA , normalB , normalC;
             };
 
+            struct BVHNode
+            {
+                float3 boundsMin;
+                float3 boundsMax;
+                int triangleIndex;
+                int triangleCount;
+                int childIndex;
+            };
+
             struct MeshInfo
             {
-                uint firstTriangleIndex;
-                uint triangleCount;
-                float3 boxMin;
-                float3 boxMax;
+                int triangleOffset;
+                int nodeOffset;
+                float4x4 localToWorldMatrix;
+                float4x4 worldToLocalMatrix;
                 RayTracingMaterial material;
             };
             
@@ -104,17 +106,16 @@ Shader "Ray Tracing/RayTracingShader"
                 float3 normal;
                 RayTracingMaterial material;
             };
-
+            
             
 
             //========== Buffer ==========//
-            StructuredBuffer<Sphere> _Spheres;
-            int _SphereCount;
-
             StructuredBuffer<Triangle> _Triangles;
-            StructuredBuffer<MeshInfo> _Meshes;
+            StructuredBuffer<BVHNode> _Nodes;
+            StructuredBuffer<MeshInfo> _MeshInfos;
             int _MeshCount;
 
+            
             
             //========== Tools ==========//
             // 获取生成随机数的种子
@@ -173,53 +174,10 @@ Shader "Ray Tracing/RayTracingShader"
                 float2 pointOnCircle = float2(cos(angle) , sin(angle));
                 return pointOnCircle * sqrt(RandomValue01(seed));
             }
-            
-            
-            //========== SDF ==========//
-            HitInfo RaySphere(Ray ray , Sphere sphere)
-            {
-                HitInfo info = (HitInfo)0;
-    
-                // 转换至局部坐标系
-                float3 offsetOrigin = ray.origin - sphere.position;
-    
-                
-                // 当 pow(ro+rd*d , 2) = pow(r , 2) 时，射线与球的表面接触
-                // 联立方程组即可得到关于 距离d 的一元二次方程:
-                //      dot(rd,rd) * d*d + 2*dot(ro,rd) * d + dot(ro,ro)-r*r = 0
-                // 其中：
-                //      delta = b*b-4*a*c = 4*dot(ro,rd)*dot(ro,rd) - 4*dot(rd,rd)*(dot(ro,ro)-r*r)
-                // 由于rd为单位向量
-                // 所以：
-                //      delta = 4*dot(ro,rd)*dot(ro,rd) - 4*(dot(ro,ro)-r*r)
-                // 当delta大于0时，射线与球有两个交点；当delta等于0时，射线与球有且只有一个交点；当delta小于0时，射线与球无交点
-                // 求解：
-                //      d = (-b (+或-) sqrt(delta)) / (2*a)
-                // 代入得：
-                //      d = (-2*dot(ro,rd) (+或-) sqrt(4*dot(ro,rd)*dot(ro,rd) - 4*(dot(ro,ro)-r*r))) / (2*dot(rd,rd))
-                //        = -dot(ro,rd) (+或-) sqrt(dot(ro,rd)*dot(ro,rd) - (dot(ro,ro)-r*r))
-    
-    
-                float a = dot(ray.dir , ray.dir);
-                float b = 2 * dot(offsetOrigin , ray.dir);
-                float c = dot(offsetOrigin , offsetOrigin) - sphere.radius * sphere.radius;
-    
-                float delta = b * b - 4 * a * c;
-                if (delta >= 0)
-                {
-                    float d = (-b - sqrt(delta)) / (2 * a);                     // 使用减号取两个交点中更接近射线起点的那个（只有一个交点时加减号无差异）
-                    if (d >= 0)                                                 // 排除负数距离
-                    {
-                        info.didHit = true;
-                        info.distance = d;
-                        info.pos = ray.origin + ray.dir * d;                    // 世界坐标
-                        info.normal = normalize(info.pos - sphere.position);
-                    }
-                }
-                
-                return info;
-            }
 
+            
+            
+            //========== Ray Collision ==========//
             HitInfo RayTriangle(Ray ray , Triangle tri)
             {
                 // Möller-Trumbore 算法（是啥东西（？）
@@ -258,7 +216,8 @@ Shader "Ray Tracing/RayTracingShader"
                 return info;
             }
 
-            bool RayBounds(Ray ray , float3 boxMin , float3 boxMax , out float tEnter , out float tExit)
+            // 当命中包围盒时，返回命中点距离，否则返回无限大
+            float RayBounds(Ray ray , float3 boxMin , float3 boxMax)
             {
                 float3 inDir = 1.0 / ray.dir;
                 
@@ -268,55 +227,105 @@ Shader "Ray Tracing/RayTracingShader"
                 float3 t1 = min(tMin , tMax);
                 float3 t2 = max(tMin , tMax);
 
-                tEnter = max(max(t1.x , t1.y) , t1.z);
-                tExit = min(min(t2.x , t2.y) , t2.z);
+                float tEnter = max(max(t1.x , t1.y) , t1.z);
+                float tExit = min(min(t2.x , t2.y) , t2.z);
+
+                bool didHit = tExit >= 0 && tEnter <= tExit;
                 
-                return tExit >= 0 && tEnter <= tExit;
+                return didHit ? tEnter : 1.#INF;
+            }
+
+            HitInfo RayModel(Ray ray , int nodeOffset , int triangleOffset)
+            {
+                HitInfo closestHit = (HitInfo)0;
+                closestHit.distance = 1.#INF;
+
+                // 节点栈
+                int nodeIndexStack[32];                                                 // 栈大小为 BVH 最大深度
+                int stackIndex = 0;
+                nodeIndexStack[stackIndex++] = nodeOffset;                              // 压入根节点
+
+                // 循环递归
+                while (stackIndex > 0)
+                {
+                    BVHNode node = _Nodes[nodeIndexStack[--stackIndex]];
+                    
+                    // 若为叶子节点则进行三角形检测
+                    if (node.childIndex < 0)
+                    {
+                        int triIndexStart = triangleOffset + node.triangleIndex;
+                        
+                        for (int i=triIndexStart ; i<triIndexStart + node.triangleCount ; i++)
+                        {
+                            Triangle tri = _Triangles[i];
+                            HitInfo info = RayTriangle(ray , tri);
+
+                            if (info.didHit && info.distance < closestHit.distance)
+                            {
+                                closestHit = info;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // 若不为叶子节点则检测包围盒
+                        BVHNode nodeA = _Nodes[nodeOffset + node.childIndex];
+                        BVHNode nodeB = _Nodes[nodeOffset + node.childIndex + 1];
+                        
+                        float distanceA = RayBounds(ray , nodeA.boundsMin , nodeA.boundsMax);
+                        float distanceB = RayBounds(ray , nodeB.boundsMin , nodeB.boundsMax);
+
+                        // 将距离相机更近的包围盒后压入栈顶，优先递归
+                        if (distanceA > distanceB)
+                        {
+                            if (distanceA < closestHit.distance)
+                                nodeIndexStack[stackIndex++] = nodeOffset + node.childIndex;
+
+                            if (distanceB < closestHit.distance)
+                                nodeIndexStack[stackIndex++] = nodeOffset + node.childIndex + 1;
+                        }
+                        else
+                        {
+                            if (distanceB < closestHit.distance)
+                                nodeIndexStack[stackIndex++] = nodeOffset + node.childIndex + 1;
+                            
+                            if (distanceA < closestHit.distance)
+                                nodeIndexStack[stackIndex++] = nodeOffset + node.childIndex;
+                        }
+                    }
+                    
+                }
+                
+                return closestHit;
             }
 
             HitInfo CalculateRayCollision(Ray ray)
             {
-                HitInfo closestHit = (HitInfo)0;
-                closestHit.distance = 1.#INF;                   // 设置初始距离为无限远
-
-                for (int i=0 ; i<_SphereCount ; i++)
-                {
-                    Sphere sphere = _Spheres[i];
-                    HitInfo info = RaySphere(ray , sphere);
-
-                    if (info.didHit && info.distance < closestHit.distance)
-                    {
-                        closestHit = info;
-                        closestHit.material = sphere.material;
-                    }
-                }
+                HitInfo closestInfo = (HitInfo)0;
+                closestInfo.distance = 1.#INF;
 
                 for (int i=0 ; i<_MeshCount ; i++)
                 {
-                    MeshInfo meshInfo = _Meshes[i];
-                    float tEnter , tExit;
-
-                    // 当 射线未触碰包围盒 或 射线穿入包围盒交点距离大于最近距离（该包围盒在别的物体后方） 时，跳过该网格
-                    if (!RayBounds(ray , meshInfo.boxMin , meshInfo.boxMax , tEnter , tExit) || tEnter > closestHit.distance)
-                        continue;
+                    MeshInfo mesh = _MeshInfos[i];
                     
-                    for (uint j=0 ; j<meshInfo.triangleCount ; j++)
-                    {
-                        int index = meshInfo.firstTriangleIndex + j;
-                        HitInfo info = RayTriangle(ray , _Triangles[index]);
+                    Ray localRay;
+                    localRay.origin = mul(mesh.worldToLocalMatrix , float4(ray.origin , 1));
+                    localRay.dir = normalize(mul(mesh.worldToLocalMatrix , float4(ray.dir , 0)));
+                    
+                    HitInfo localInfo = RayModel(localRay , mesh.nodeOffset , mesh.triangleOffset);
 
-                        if (info.didHit && info.distance < closestHit.distance)
-                        {
-                            closestHit = info;
-                            closestHit.material = meshInfo.material;
-                        }
+                    if (localInfo.didHit && localInfo.distance < closestInfo.distance)
+                    {
+                        closestInfo = localInfo;
+                        closestInfo.pos = ray.origin + ray.dir * localInfo.distance;
+                        closestInfo.normal = normalize(mul(mesh.localToWorldMatrix , float4(localInfo.normal , 0)));
+                        closestInfo.material = mesh.material;
                     }
                 }
 
-                return closestHit;
+                return closestInfo;
             }
-
-
+            
             
             //========== 环境光 ==========//
             float3 GetEnvironmentLight(Ray ray)
@@ -342,7 +351,7 @@ Shader "Ray Tracing/RayTracingShader"
                                                                                              
                 for (int i=0 ; i<=_MaxBounceCount ; i++)                                     
                 {                                                                            
-                    HitInfo info = CalculateRayCollision(ray);                               
+                    HitInfo info = CalculateRayCollision(ray);                             
                                                                                              
                     if (info.didHit)                                                         
                     {                                                                        
@@ -398,36 +407,46 @@ Shader "Ray Tracing/RayTracingShader"
                 float3 cameraUp = _CameraLocalToWorldMatrix._m01_m11_m21;
 
                 
-                float3 totalIncomingLights = 0;
-                for (int i=0 ; i<_RayCountPerPixel ; i++)
-                {
-                    // 生成光线
-                    Ray ray;
+                // float3 totalIncomingLights = 0;
+                // for (int i=0 ; i<_RayCountPerPixel ; i++)
+                // {
+                //     // 生成光线
+                //     Ray ray;
+                //
+                //     if (_DepthOfFieldEnabled)
+                //     {
+                //         // 附加景深
+                //         float2 defocusJitter = RandomPointInCircle(seed) * _DefocusStrength / _ScreenParams.x;
+                //         ray.origin = _WorldSpaceCameraPos + cameraRight * defocusJitter.x + cameraUp * defocusJitter.y;
+                //     }
+                //     else
+                //     {
+                //         ray.origin = _WorldSpaceCameraPos;
+                //     }
+                //
+                //     // 附加模糊以处理抗锯齿
+                //     float2 jitter = RandomPointInCircle(seed) * _DivergeStrength / _ScreenParams.x;
+                //     float3 jitterViewPoint = viewPoint + cameraRight * jitter.x + cameraUp * jitter.y;
+                //     
+                //     ray.dir = normalize(jitterViewPoint - ray.origin);
+                //
+                //     
+                //     // 光线追踪
+                //     totalIncomingLights += Trace(ray , seed);
+                // }
+                // float3 pixelColor = totalIncomingLights / _RayCountPerPixel;
+                //
+                //
+                // return float4(pixelColor , 1);
 
-                    if (_DepthOfFieldEnabled)
-                    {
-                        // 附加景深
-                        float2 defocusJitter = RandomPointInCircle(seed) * _DefocusStrength / _ScreenParams.x;
-                        ray.origin = _WorldSpaceCameraPos + cameraRight * defocusJitter.x + cameraUp * defocusJitter.y;
-                    }
-                    else
-                    {
-                        ray.origin = _WorldSpaceCameraPos;
-                    }
-
-                    // 附加模糊以处理抗锯齿
-                    float2 jitter = RandomPointInCircle(seed) * _DivergeStrength / _ScreenParams.x;
-                    float3 jitterViewPoint = viewPoint + cameraRight * jitter.x + cameraUp * jitter.y;
-                    
-                    ray.dir = normalize(jitterViewPoint - ray.origin);
-
-                    
-                    // 光线追踪
-                    totalIncomingLights += Trace(ray , seed);
-                }
-                float3 pixelColor = totalIncomingLights / _RayCountPerPixel;
                 
-                return float4(pixelColor , 1);
+                Ray ray;
+                ray.origin = _WorldSpaceCameraPos;
+                ray.dir = normalize(viewPoint - ray.origin);
+
+                HitInfo info = CalculateRayCollision(ray);
+                
+                return float4((info.normal * 0.5 + 0.5) * info.didHit , 1);
             }
 
 

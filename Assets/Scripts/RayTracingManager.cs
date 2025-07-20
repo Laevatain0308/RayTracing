@@ -8,9 +8,6 @@ public class RayTracingManager : MonoBehaviour
     public static RayTracingManager instance;
     
     
-    public const int trianglesPerMeshLimit = 1500;
-    
-    
     [Header("Toggle")]
     [SerializeField] private bool useShaderInSceneView;
     
@@ -18,7 +15,6 @@ public class RayTracingManager : MonoBehaviour
     [Header("Reference")]
     [SerializeField] private Shader rayTracingShader;
     [SerializeField] private Shader frameAccumulator;
-    public ComputeShader transformTriangles;
     private Material rayTracingMaterial;
     private Material frameAccumulatorMaterial;
     
@@ -51,20 +47,14 @@ public class RayTracingManager : MonoBehaviour
 
 
     [Header("Ray Traced Objects")]
-    [SerializeField] private List<RayTracedSphere> sphereObjects;
-    [SerializeField] private List<RayTracedMesh> meshObjects;
-
-    [Space]
-    [SerializeField] private int meshChunkCount;
-    [SerializeField] private int triangleCount;
+    [SerializeField] private List<RayTracedModel> models;
+    private RenderData data;
+    private bool hasBVH;
     
-    private List<Sphere> spheres;
-    private ComputeBuffer sphereBuffer;
-
-    private List<Triangle> triangles;
-    private List<MeshInfo> meshInfos;
+    
     private ComputeBuffer triangleBuffer;
-    private ComputeBuffer meshBuffer;
+    private ComputeBuffer nodeBuffer;
+    private ComputeBuffer meshInfoBuffer;
 
     
     private RenderTexture resultRT;
@@ -75,9 +65,11 @@ public class RayTracingManager : MonoBehaviour
     private void Start()
     {
         frameCount = 0;
+        hasBVH = false;
     }
 
 
+    
     //========== Ray Tracing ==========//
     private void OnRenderImage(RenderTexture src , RenderTexture target)
     {
@@ -140,9 +132,14 @@ public class RayTracingManager : MonoBehaviour
         SetRayTracingParams();
         UpdateCameraParam(Camera.current);
         
-        // 更新光追物体
-        UpdateSpheres();
-        UpdateMeshes();
+        
+        // 创建BVH
+        if (!hasBVH)
+        {
+            hasBVH = true;
+            data = CreateRenderData(models);
+            SendMeshToShader();
+        }
     }
 
 
@@ -172,79 +169,80 @@ public class RayTracingManager : MonoBehaviour
 
     private void UpdateCameraParam(Camera cam)
     {
-        float screenPlaneHeight = focusDistance * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2;
+        float distanceToCam = focusDistance > 0 ? focusDistance : cam.nearClipPlane;
+        
+        float screenPlaneHeight = distanceToCam * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2;
         float screenPlaneWidth = screenPlaneHeight * cam.aspect;
 
-        rayTracingMaterial.SetVector("_ViewParams" , new Vector3(screenPlaneWidth , screenPlaneHeight , focusDistance));
+        rayTracingMaterial.SetVector("_ViewParams" , new Vector3(screenPlaneWidth , screenPlaneHeight , distanceToCam));
         rayTracingMaterial.SetMatrix("_CameraLocalToWorldMatrix" , cam.transform.localToWorldMatrix);
     }
-
-
-    private void UpdateSpheres()
-    {
-        sphereObjects ??= new List<RayTracedSphere>();
-        
-        spheres ??= new List<Sphere>();
-        spheres.Clear();
-
-        for (int i = 0 ; i < sphereObjects.Count ; i++)
-        {
-            RayTracedSphere s = sphereObjects[i];
-            spheres.Add(new Sphere(s.GetPosition() , s.GetRadius() , s.material));
-        }
-        
-        ShaderHelper.CreateStructuredBuffer<Sphere>(ref sphereBuffer , spheres);
-        rayTracingMaterial.SetBuffer("_Spheres" , sphereBuffer);
-        rayTracingMaterial.SetInt("_SphereCount" , sphereObjects.Count);
-    }
-
-    private void UpdateMeshes()
-    {
-        meshObjects ??= new List<RayTracedMesh>();
-        
-        triangles ??= new List<Triangle>();
-        meshInfos ??= new List<MeshInfo>();
-        triangles.Clear();
-        meshInfos.Clear();
-
-        for (int i = 0 ; i < meshObjects.Count ; i++)
-        {
-            MeshChunk[] chunks = meshObjects[i].GetMeshChunks();
-            foreach (var chunk in chunks)
-            {
-                RayTracingMaterial mat = meshObjects[i].GetMaterial(chunk.subMeshIndex);
-                meshInfos.Add(new MeshInfo(triangles.Count , chunk.triangles.Length , chunk.bounds , mat));
-                triangles.AddRange(chunk.triangles);
-            }
-        }
-
-        meshChunkCount = meshInfos.Count;
-        triangleCount = triangles.Count;
-
-        ShaderHelper.CreateStructuredBuffer<Triangle>(ref triangleBuffer , triangles);
-        ShaderHelper.CreateStructuredBuffer<MeshInfo>(ref meshBuffer , meshInfos);
-        rayTracingMaterial.SetBuffer("_Triangles" , triangleBuffer);
-        rayTracingMaterial.SetBuffer("_Meshes" , meshBuffer);
-        rayTracingMaterial.SetInt("_MeshCount" , meshInfos.Count);
-    }
-
+    
+    
 
     
     //========== Ray Traced Objects ==========//
-    public void RegisterSphere(RayTracedSphere s)
+    public void RegisterModel(RayTracedModel model)
     {
-        if (!sphereObjects.Contains(s))
-            sphereObjects.Add(s);
+        if (!models.Contains(model))
+        {
+            models.Add(model);
+        }
     }
-    public void UnregisterSphere(RayTracedSphere s) => sphereObjects.Remove(s);
 
-    public void RegisterMesh(RayTracedMesh m)
+    public void UnregisterModel(RayTracedModel model)
     {
-        if (!meshObjects.Contains(m))
-            meshObjects.Add(m);
+        models.Remove(model);
     }
-    public void UnregisterMesh(RayTracedMesh m) => meshObjects.Remove(m);
 
+
+    private RenderData CreateRenderData(List<RayTracedModel> models)        // 后续优化时可以令同网格的模型共用一套三角形与节点数据
+    {
+        RenderData data = new RenderData();
+        Dictionary<Mesh , (int triangleOffset , int nodeOffset)> sharedMeshDict = new();
+            
+        foreach (var model in models)
+        {
+            if (!sharedMeshDict.ContainsKey(model.mesh))
+            {
+                sharedMeshDict.Add(model.mesh , (data.triangles.Count , data.nodes.Count));
+                    
+                BVHInformationUI.instance ? .StartBuild();
+                BVH bvh = new BVH(model.mesh.vertices , model.mesh.normals , model.mesh.triangles);
+                BVHInformationUI.instance ? .SuccessBuild();
+                
+                data.triangles.AddRange(bvh.allTriangles);
+                data.nodes.AddRange(bvh.allNodes);
+            }
+            
+            data.meshInfos.Add(new MeshInfo()
+            {
+                triangleOffset = sharedMeshDict[model.mesh].triangleOffset ,
+                nodeOffset = sharedMeshDict[model.mesh].nodeOffset ,
+                localToWorldMatrix = model.transform.localToWorldMatrix ,
+                worldToLocalMatrix = model.transform.worldToLocalMatrix ,
+                material = model.material
+            });
+        }
+        
+        BVHInformationUI.instance ? .UpdateInformation(data);
+
+        return data;
+    }
+
+    private void SendMeshToShader()
+    {
+        ShaderHelper.CreateStructuredBuffer<Triangle>(ref triangleBuffer , data.triangles);
+        ShaderHelper.CreateStructuredBuffer<BVHNode>(ref nodeBuffer , data.nodes);
+        ShaderHelper.CreateStructuredBuffer<MeshInfo>(ref meshInfoBuffer , data.meshInfos);
+            
+        rayTracingMaterial.SetBuffer("_Triangles" , triangleBuffer);
+        rayTracingMaterial.SetBuffer("_Nodes" , nodeBuffer);
+        rayTracingMaterial.SetBuffer("_MeshInfos" , meshInfoBuffer);
+        rayTracingMaterial.SetInt("_MeshCount" , data.meshInfos.Count);
+    }
+    
+    
 
     private void OnEnable()
     {
@@ -256,13 +254,14 @@ public class RayTracingManager : MonoBehaviour
 
     private void OnDisable()
     {
-        ShaderHelper.Release(sphereBuffer , triangleBuffer , meshBuffer);
+        ShaderHelper.Release(triangleBuffer , nodeBuffer , meshInfoBuffer);
         ShaderHelper.Release(resultRT);
-
+        
         instance = null;
     }
 
 
+    
     private void OnDrawGizmosSelected()
     {
         if (gizmosPlaneMesh != null && gizmosDisplay)

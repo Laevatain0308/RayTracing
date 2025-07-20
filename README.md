@@ -3,7 +3,7 @@
 这里是对光线追踪技术的第一次尝试，该项目基于Unity实现。 
 
 感谢 Sebastian Lague 老师的开发教程及思路提供：[Code Advanture: Ray Tracing](https://www.youtube.com/watch?v=Qz0KTGYJtUk)<br>
-同时也感谢老师对代码的无私开源：[SebLague/Ray-Tracing at Episode01](https://github.com/SebLague/Ray-Tracing/tree/Episode01)<br>
+同时也感谢老师对代码的无私开源：[SebLague/Ray-Tracing at Episode01](https://github.com/SebLague/Ray-Tracing/tree/main)<br>
 对本人帮助颇多  
 
 
@@ -14,7 +14,10 @@
   
 - 2025-7-16<br>
   实现了 景深效果 与简单的 抗锯齿 处理。  
+  
+- 2025-7-20<br>
+  将分块渲染进一步拓展为 BVH 结构，优化光线检测算法，极大程度提高运行帧率。  
 
 
 TODO：<br>
-- 学习 ComputeShader 部分，尝试利用其进行三角形顶点坐标系转换的GPU加速。
+
