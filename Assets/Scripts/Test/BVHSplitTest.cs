@@ -27,7 +27,7 @@ public class BVHSplitTest : MonoBehaviour
         
         boxes.Add(new BVHBox(nodeIndex , depth , fill ? BVHBox.DisplayType.Focus : BVHBox.DisplayType.Wire));
 
-        BVHNode node = bvh.allNodes[nodeIndex];
+        BVHNode node = bvh.allNodes.nodes[nodeIndex];
         if (node.childIndex < 0)
             return;
         
@@ -53,7 +53,7 @@ public class BVHSplitTest : MonoBehaviour
     {
         for (int i = 0 ; i < boxes.Count ; i++)
         {
-            BVHNode node = bvh.allNodes[boxes[i].nodeIndex];
+            BVHNode node = bvh.allNodes.nodes[boxes[i].nodeIndex];
             
             Gizmos.color = boxes[i].color;
             

@@ -20,13 +20,13 @@ public struct BVHBox
         switch (type)
         {
             case DisplayType.Wire:
-                color.a = 0.6f;
+                color.a = _depth / 16f * 0.6f + 0.05f;
                 break;
             case DisplayType.Focus:
                 color.a = 0.3f;
                 break;
             case DisplayType.Recursion:
-                color.a = _depth / 10f * 0.1f + 0.02f;
+                color.a = _depth / 16f * 0.1f + 0.02f;
                 break;
         }
     } 

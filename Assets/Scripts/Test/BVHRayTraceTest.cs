@@ -47,7 +47,7 @@ public class BVHRayTraceTest : MonoBehaviour
         if (nodeIndex < 0)
             return;
         
-        BVHNode node = bvh.allNodes[nodeIndex];
+        BVHNode node = bvh.allNodes.nodes[nodeIndex];
         
         BoundingBox box = new BoundingBox();
         box.GrowToInclude(node.boundsMin , node.boundsMax);
@@ -137,7 +137,7 @@ public class BVHRayTraceTest : MonoBehaviour
         
         for (int i = 0 ; i < boxes.Count ; i++)
         {
-            BVHNode node = bvh.allNodes[boxes[i].nodeIndex];
+            BVHNode node = bvh.allNodes.nodes[boxes[i].nodeIndex];
             
             Gizmos.color = boxes[i].color;
             Gizmos.DrawCube(node.GetBoundsCenter() , node.GetBoundsSize());

@@ -28,10 +28,8 @@ public struct BoundingBox
         }
     }
 
-    public void GrowToInclude(Triangle tri)
+    public void GrowToInclude(BVHTriangle bvhTri)
     {
-        GrowToInclude(tri.posA , tri.posA);
-        GrowToInclude(tri.posB , tri.posB);
-        GrowToInclude(tri.posC , tri.posC);
+        GrowToInclude(bvhTri.boundsMin , bvhTri.boundsMax);
     }
 }

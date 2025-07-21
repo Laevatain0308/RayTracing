@@ -196,7 +196,7 @@ public class RayTracingManager : MonoBehaviour
     }
 
 
-    private RenderData CreateRenderData(List<RayTracedModel> models)        // 后续优化时可以令同网格的模型共用一套三角形与节点数据
+    private RenderData CreateRenderData(List<RayTracedModel> models)
     {
         RenderData data = new RenderData();
         Dictionary<Mesh , (int triangleOffset , int nodeOffset)> sharedMeshDict = new();
@@ -212,7 +212,7 @@ public class RayTracingManager : MonoBehaviour
                 BVHInformationUI.instance ? .SuccessBuild();
                 
                 data.triangles.AddRange(bvh.allTriangles);
-                data.nodes.AddRange(bvh.allNodes);
+                data.nodes.AddRange(bvh.allNodes.nodes);
             }
             
             data.meshInfos.Add(new MeshInfo()

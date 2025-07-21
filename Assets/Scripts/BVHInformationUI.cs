@@ -36,7 +36,7 @@ public class BVHInformationUI : MonoBehaviour
                                               + "\nLeaf Tris:  "
                                               + "\n - Min:  " + leafMinTriCount
                                               + "\n - Max:  " + leafMaxTriCount
-                                              + "\n - Average:  " + (leafCount != 0 ? leafAllTris / leafCount : null);
+                                              + "\n - Average:  " + (leafCount != 0 ? leafAllTris / (float)leafCount : -1);
     }
 
 
